@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DroneGuard — Flight Data Tamper Detection</title>
+<style>
+/* ── Reset & base ──────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --navy:     #0F2044;
+  --navy2:    #1A3260;
+  --blue:     #1D4ED8;
+  --blue-lt:  #DBEAFE;
+  --blue-txt: #1E40AF;
+  --green:    #15803D;
+  --green-lt: #DCFCE7;
+  --amber:    #B45309;
+  --amber-lt: #FEF3C7;
+  --red:      #B91C1C;
+  --red-lt:   #FEE2E2;
+  --bg:       #F1F5F9;
+  --surface:  #FFFFFF;
+  --border:   #E2E8F0;
+  --text:     #0F172A;
+  --muted:    #64748B;
+  --radius:   8px;
+  --shadow:   0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+  --shadow-lg:0 4px 16px rgba(0,0,0,.12);
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ────────────────────────────────────────────────────────── */
+header {
+  background: var(--navy);
+  padding: 0 28px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header-left { display: flex; align-items: center; gap: 12px; }
+.header-logo {
+  width: 36px; height: 36px;
+  background: var(--blue);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+}
+.header-title { color: #fff; font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+.header-sub   { color: #93C5FD; font-size: 11px; margin-top: 1px; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.header-badge {
+  background: rgba(255,255,255,.1);
+  color: #CBD5E1;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.15);
+}
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #94A3B8;
+  font-size: 12px;
+}
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #22C55E;
+  flex-shrink: 0;
+  transition: background .3s;
+}
+.status-dot.busy {
+  background: #F59E0B;
+  animation: pulse 1s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────── */
+.layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  padding: 20px 24px;
+  flex: 1;
+  min-height: 0;
+}
+.sidebar { display: flex; flex-direction: column; gap: 16px; }
+
+/* ── Cards ──────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.card-header {
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-header h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy);
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.step-badge {
+  width: 22px; height: 22px;
+  background: var(--navy);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.card-body { padding: 16px 18px; }
+
+/* ── Upload zone ─────────────────────────────────────────────────────── */
+.upload-zone {
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  padding: 28px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  background: #FAFBFC;
+}
+.upload-zone:hover, .upload-zone.drag-over {
+  border-color: var(--blue);
+  background: var(--blue-lt);
+}
+.upload-zone.has-file {
+  border-color: var(--green);
+  background: var(--green-lt);
+  border-style: solid;
+}
+.upload-icon { font-size: 36px; margin-bottom: 10px; }
+.upload-text { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.upload-text strong { color: var(--blue); cursor: pointer; }
+.upload-filename {
+  font-size: 12px;
+  color: var(--green);
+  font-weight: 600;
+  margin-top: 8px;
+  word-break: break-all;
+}
+#file-input { display: none; }
+
+/* ── Run button ──────────────────────────────────────────────────────── */
+.btn-run {
+  width: 100%;
+  padding: 13px;
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background .15s, transform .1s;
+  margin-top: 14px;
+}
+.btn-run:hover:not(:disabled) { background: #1D40C0; }
+.btn-run:active:not(:disabled) { transform: scale(.98); }
+.btn-run:disabled { background: #94A3B8; cursor: not-allowed; }
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  display: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Progress ────────────────────────────────────────────────────────── */
+.progress-wrap { margin-top: 12px; display: none; }
+.progress-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.progress-bar-bg {
+  background: var(--border);
+  border-radius: 4px;
+  height: 6px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 4px;
+  transition: width .3s ease;
+  width: 0%;
+}
+
+/* ── Output buttons ──────────────────────────────────────────────────── */
+.btn-out {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  margin-bottom: 8px;
+  text-decoration: none;
+  transition: background .15s, border-color .15s;
+}
+.btn-out:hover:not([disabled]) { background: var(--blue-lt); border-color: var(--blue); }
+.btn-out[disabled] { color: var(--muted); cursor: not-allowed; pointer-events: none; opacity: .6; }
+.btn-out-icon { font-size: 18px; flex-shrink: 0; }
+.btn-out-text { flex: 1; }
+.btn-out-text small { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+
+/* ── Right panel ─────────────────────────────────────────────────────── */
+.right-panel { display: flex; flex-direction: column; gap: 16px; }
+
+/* ── Verdict banner ──────────────────────────────────────────────────── */
+.verdict-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 22px 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.verdict-pill {
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  flex-shrink: 0;
+  min-width: 160px;
+  text-align: center;
+}
+.verdict-pill.CLEAN      { background: var(--green-lt); color: var(--green); border: 2px solid #86EFAC; }
+.verdict-pill.SUSPICIOUS { background: var(--amber-lt); color: var(--amber); border: 2px solid #FCD34D; }
+.verdict-pill.TAMPERED   { background: var(--red-lt);   color: var(--red);   border: 2px solid #FCA5A5; }
+.verdict-pill.waiting    { background: var(--bg); color: var(--muted); font-size: 14px; font-weight: 500; border: 2px solid var(--border); }
+.verdict-desc { flex: 1; }
+.verdict-desc h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.verdict-desc p  { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+/* ── Metric cards ────────────────────────────────────────────────────── */
+.metrics-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.metric-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.metric-card.crit { border-top: 3px solid #B91C1C; }
+.metric-card.high { border-top: 3px solid #D97706; }
+.metric-card.med  { border-top: 3px solid #CA8A04; }
+.metric-card.rows { border-top: 3px solid var(--blue); }
+.metric-val {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--navy);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.metric-card.crit .metric-val { color: #B91C1C; }
+.metric-card.high .metric-val { color: #D97706; }
+.metric-card.med  .metric-val { color: #CA8A04; }
+.metric-label { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
+
+/* ── Flight stats strip ──────────────────────────────────────────────── */
+.stats-strip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 20px;
+  display: none;
+  gap: 0;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.stats-strip.visible { display: flex; }
+.stat-item {
+  flex: 1;
+  text-align: center;
+  padding: 0 12px;
+  border-right: 1px solid var(--border);
+}
+.stat-item:last-child { border-right: none; }
+.stat-val  { font-size: 18px; font-weight: 700; color: var(--navy); }
+.stat-label{ font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── Anomaly table ───────────────────────────────────────────────────── */
+.table-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.table-toolbar {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.table-title { font-size: 13px; font-weight: 600; color: var(--navy); text-transform: uppercase; letter-spacing: .02em; flex: 1; }
+.row-count { font-size: 12px; color: var(--muted); }
+.filter-btns { display: flex; gap: 6px; }
+.filter-btn {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  color: var(--muted);
+}
+.filter-btn:hover { border-color: var(--blue); color: var(--blue); }
+.filter-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+.filter-btn.f-crit.active { background: #B91C1C; border-color: #B91C1C; }
+.filter-btn.f-high.active { background: #D97706; border-color: #D97706; }
+.filter-btn.f-med.active  { background: #CA8A04; border-color: #CA8A04; }
+
+.table-scroll { overflow-y: auto; flex: 1; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  background: #F8FAFC;
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+tbody tr:hover { background: #F8FAFC; }
+tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #F1F5F9;
+  vertical-align: middle;
+  font-size: 13px;
+}
+tbody tr:last-child td { border-bottom: none; }
+
+.sev-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.sev-CRITICAL { background: #FEE2E2; color: #B91C1C; }
+.sev-HIGH     { background: #FEF3C7; color: #D97706; }
+.sev-MEDIUM   { background: #FEF9C3; color: #CA8A04; }
+
+.detail-cell {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  cursor: help;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--muted);
+}
+.empty-icon { font-size: 40px; margin-bottom: 12px; }
+
+/* ── Toast ───────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--navy);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 9999;
+  opacity: 0;
+  transition: transform .25s, opacity .25s;
+  box-shadow: var(--shadow-lg);
+  white-space: nowrap;
+}
+.toast.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+/* ── Connection indicator ─────────────────────────────────────────────── */
+.conn-badge {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+.conn-badge.online  { background: #DCFCE7; color: #15803D; }
+.conn-badge.offline { background: #FEE2E2; color: #B91C1C; }
+.conn-badge.checking{ background: var(--bg); color: var(--muted); }
+
+/* ── Scrollbar ──────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <div class="header-logo">🛡️</div>
+    <div>
+      <div class="header-title">DroneGuard</div>
+      <div class="header-sub">Drone Flight Data Tamper Detection System</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status-bar">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">Ready</span>
+    </div>
+    <span class="conn-badge checking" id="conn-badge">Connecting…</span>
+    <span class="header-badge">Law Enforcement</span>
+  </div>
+</header>
+
+<!-- ── Main Layout ──────────────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- Step 1: Upload -->
+    <div class="card">
+      <div class="card-header">
+        <div class="step-badge">1</div>
+        <h2>Upload Flight Data</h2>
+      </div>
+      <div class="card-body">
+        <div class="upload-zone" id="upload-zone"
+             onclick="document.getElementById('file-input').click()"
+             ondragover="onDragOver(event)"
+             ondragleave="onDragLeave(event)"
+             ondrop="onDrop(event)">
+          <div class="upload-icon">📂</div>
+          <div class="upload-text">
+            <strong>Click to browse</strong> or drag &amp; drop<br>
+            <small>Converted DJI CSV file (.csv)</small>
+          </div>
+          <div class="upload-filename" id="upload-filename"></div>
+        </div>
+        <input type="file" id="file-input" accept=".csv" onchange="handleFile(this.files[0])">
+      </div>
+    </div>
+
+    <!-- Step 2: Analyse -->
+    <div class="card">
+      <div class="card-header">
+        <div class="step-badge">2</div>
+        <h2>Run Analysis</h2>
+      </div>
+      <div class="card-body">
+        <button class="btn-run" id="run-btn" disabled onclick="runAnalysis()">
+          <div class="spinner" id="spinner"></div>
+          <span id="run-btn-text">▶&nbsp; Run Analysis</span>
+        </button>
+        <div class="progress-wrap" id="progress-wrap">
+          <div class="progress-label" id="progress-label">Starting…</div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progress-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Outputs -->
+    <div class="card">
+      <div class="card-header">
+        <div class="step-badge">3</div>
+        <h2>Download / View</h2>
+      </div>
+      <div class="card-body">
+        <button class="btn-out" id="btn-map" disabled onclick="openMap()">
+          <span class="btn-out-icon">🗺️</span>
+          <span class="btn-out-text">
+            Open Interactive Map
+            <small>Flight path with anomaly markers</small>
+          </span>
+        </button>
+        <button class="btn-out" id="btn-csv" disabled onclick="downloadReport('csv')">
+          <span class="btn-out-icon">📊</span>
+          <span class="btn-out-text">
+            Download Report (CSV)
+            <small>All anomalies in spreadsheet format</small>
+          </span>
+        </button>
+        <button class="btn-out" id="btn-txt" disabled onclick="downloadReport('txt')">
+          <span class="btn-out-icon">📄</span>
+          <span class="btn-out-text">
+            Download Summary (TXT)
+            <small>Court-ready narrative report</small>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Info -->
+    <div class="card">
+      <div class="card-header">
+        <h2>ℹ Detection Methods</h2>
+      </div>
+      <div class="card-body" style="color:var(--muted);font-size:12px;line-height:1.8;">
+        <div>🕐 <b>Timestamp Integrity</b> — Backward jumps, gaps, duplicates, MessageID continuity</div>
+        <div style="margin-top:8px">📍 <b>GPS Consistency</b> — Impossible speeds, altitude jumps, baro/GPS mismatch, satellite loss</div>
+        <div style="margin-top:8px">📈 <b>Statistical Analysis</b> — IMU spikes, battery anomalies, velocity inconsistency, motor RPM imbalance</div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── Right Panel ──────────────────────────────────────────────── -->
+  <div class="right-panel">
+
+    <!-- Verdict -->
+    <div class="verdict-card" id="verdict-card">
+      <div class="verdict-pill waiting" id="verdict-pill">AWAITING<br>ANALYSIS</div>
+      <div class="verdict-desc">
+        <h3 id="verdict-title">Upload a CSV file and run analysis to begin</h3>
+        <p id="verdict-desc">DroneGuard will check timestamp integrity, GPS consistency, and statistical anomalies across all 400,000+ rows of your flight log.</p>
+      </div>
+    </div>
+
+    <!-- Metric Cards -->
+    <div class="metrics-row">
+      <div class="metric-card rows">
+        <div class="metric-val" id="m-rows">—</div>
+        <div class="metric-label">Total Rows</div>
+      </div>
+      <div class="metric-card crit">
+        <div class="metric-val" id="m-crit">—</div>
+        <div class="metric-label">🔴 Critical</div>
+      </div>
+      <div class="metric-card high">
+        <div class="metric-val" id="m-high">—</div>
+        <div class="metric-label">🟠 High</div>
+      </div>
+      <div class="metric-card med">
+        <div class="metric-val" id="m-med">—</div>
+        <div class="metric-label">🟡 Medium</div>
+      </div>
+    </div>
+
+    <!-- Flight Stats Strip -->
+    <div class="stats-strip" id="stats-strip">
+      <div class="stat-item">
+        <div class="stat-val" id="s-duration">—</div>
+        <div class="stat-label">Flight Duration</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-val" id="s-gps">—</div>
+        <div class="stat-label">GPS Points</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-val" id="s-alt">—</div>
+        <div class="stat-label">Max Altitude</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-val" id="s-speed">—</div>
+        <div class="stat-label">Max Speed</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-val" id="s-batt">—</div>
+        <div class="stat-label">Volt Drop</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-val" id="s-anom">—</div>
+        <div class="stat-label">Total Anomalies</div>
+      </div>
+    </div>
+
+    <!-- Anomaly Table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <span class="table-title">⚠ Anomaly Log</span>
+        <span class="row-count" id="row-count"></span>
+        <div class="filter-btns">
+          <button class="filter-btn active"    onclick="filterTable('ALL', this)">All</button>
+          <button class="filter-btn f-crit"    onclick="filterTable('CRITICAL', this)">🔴 Critical</button>
+          <button class="filter-btn f-high"    onclick="filterTable('HIGH', this)">🟠 High</button>
+          <button class="filter-btn f-med"     onclick="filterTable('MEDIUM', this)">🟡 Medium</button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Severity</th>
+              <th>Type</th>
+              <th>Row</th>
+              <th>Time (s)</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+            <tr><td colspan="5">
+              <div class="empty-state">
+                <div class="empty-icon">📋</div>
+                <div>Upload a CSV and run analysis to view anomalies</div>
+              </div>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast"></div>
+
+<script>
+const API = "http://localhost:5000/api/";
+let sessionId     = null;
+let allAnomalies  = [];
+let currentFilter = "ALL";
+
+// ─── Backend health check ────────────────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch(API + "health");
+    if (r.ok) {
+      document.getElementById("conn-badge").className = "conn-badge online";
+      document.getElementById("conn-badge").textContent = "● Backend Online";
+    } else { throw new Error(); }
+  } catch {
+    document.getElementById("conn-badge").className = "conn-badge offline";
+    document.getElementById("conn-badge").textContent = "✕ Backend Offline";
+    document.getElementById("status-text").textContent = "Cannot reach backend — start app.py";
+  }
+}
+checkHealth();
+setInterval(checkHealth, 15000);
+
+// ─── Drag & Drop ─────────────────────────────────────────────────────
+function onDragOver(e) {
+  e.preventDefault();
+  document.getElementById("upload-zone").classList.add("drag-over");
+}
+function onDragLeave(e) {
+  document.getElementById("upload-zone").classList.remove("drag-over");
+}
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById("upload-zone").classList.remove("drag-over");
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+}
+
+// ─── File upload ──────────────────────────────────────────────────────
+async function handleFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".csv")) {
+    showToast("Only .csv files are accepted");
+    return;
+  }
+
+  sessionId = null;
+  document.getElementById("run-btn").disabled = true;
+  setStatus("Uploading " + file.name + "…", true);
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  try {
+    const r   = await fetch(API + "upload", { method: "POST", body: fd });
+    const res = await r.json();
+
+    if (!r.ok) { showToast(res.error || "Upload failed"); setStatus("Upload failed", false); return; }
+
+    sessionId = res.session_id;
+    document.getElementById("upload-zone").classList.add("has-file");
+    document.getElementById("upload-filename").textContent = "✓  " + file.name;
+    document.getElementById("run-btn").disabled = false;
+    setStatus("File ready: " + file.name, false);
+    showToast("File uploaded — ready to analyse");
+  } catch {
+    showToast("Upload failed — is the backend running?");
+    setStatus("Upload failed", false);
+  }
+}
+
+// ─── Run analysis ─────────────────────────────────────────────────────
+async function runAnalysis() {
+  if (!sessionId) { showToast("Please upload a file first"); return; }
+
+  setRunning(true);
+  clearResults();
+  setStatus("Running analysis…", true);
+  showProgress("Starting analysis…", 5);
+
+  const steps = [
+    [20, "Loading CSV data…"],
+    [38, "Checking timestamp integrity…"],
+    [55, "Checking GPS consistency…"],
+    [72, "Running statistical analysis…"],
+    [85, "Generating flight map…"],
+    [93, "Compiling report…"],
+  ];
+  let si = 0;
+  const ticker = setInterval(() => {
+    if (si < steps.length) {
+      showProgress(steps[si][1], steps[si][0]);
+      si++;
+    }
+  }, 900);
+
+  try {
+    const r = await fetch(API + "analyse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ session_id: sessionId })
+    });
+    clearInterval(ticker);
+    const res = await r.json();
+
+    if (!r.ok) {
+      showToast(res.error || "Analysis failed");
+      setRunning(false);
+      setStatus("Analysis failed", false);
+      hideProgress();
+      return;
+    }
+
+    showProgress("Done.", 100);
+    setTimeout(hideProgress, 800);
+    renderResults(res);
+    setRunning(false);
+    setStatus("Analysis complete — " + res.anomaly_count + " anomalies found", false);
+    showToast("Done — verdict: " + res.verdict);
+
+  } catch (err) {
+    clearInterval(ticker);
+    showToast("Analysis failed — check backend console");
+    setRunning(false);
+    setStatus("Error during analysis", false);
+    hideProgress();
+  }
+}
+
+// ─── Render results ───────────────────────────────────────────────────
+function renderResults(res) {
+  allAnomalies = res.anomalies || [];
+
+  // Verdict
+  const vPill = document.getElementById("verdict-pill");
+  vPill.className = "verdict-pill " + res.verdict;
+  vPill.textContent = res.verdict;
+
+  const titles = {
+    CLEAN:      "No signs of tampering detected",
+    SUSPICIOUS: "Anomalies detected — further review recommended",
+    TAMPERED:   "Strong evidence of data tampering found"
+  };
+  const descs = {
+    CLEAN:      "All timestamp, GPS, and statistical checks passed. The flight log appears unmodified.",
+    SUSPICIOUS: res.anomaly_count + " anomalies were detected. The data may have been partially modified. Detailed review is recommended.",
+    TAMPERED:   res.anomaly_count + " anomalies detected including CRITICAL findings. This log shows strong signs of modification."
+  };
+  document.getElementById("verdict-title").textContent = titles[res.verdict] || res.verdict;
+  document.getElementById("verdict-desc").textContent  = descs[res.verdict]  || "";
+
+  // Metrics
+  document.getElementById("m-rows").textContent = Number(res.total_rows).toLocaleString();
+  document.getElementById("m-crit").textContent = res.sev_counts.CRITICAL || 0;
+  document.getElementById("m-high").textContent = res.sev_counts.HIGH     || 0;
+  document.getElementById("m-med").textContent  = res.sev_counts.MEDIUM   || 0;
+
+  // Flight stats
+  const fs = res.flight_stats || {};
+  if (Object.keys(fs).length > 0) {
+    document.getElementById("stats-strip").classList.add("visible");
+    document.getElementById("s-duration").textContent =
+      fs.duration_min != null ? fs.duration_min + " min" : "—";
+    document.getElementById("s-gps").textContent =
+      fs.gps_points != null ? Number(fs.gps_points).toLocaleString() : "—";
+    document.getElementById("s-alt").textContent =
+      fs.alt_max_m != null ? fs.alt_max_m + " m" : "—";
+    document.getElementById("s-speed").textContent =
+      fs.max_speed_kmh != null ? fs.max_speed_kmh + " km/h" : "—";
+    document.getElementById("s-batt").textContent =
+      fs.volt_drop != null ? fs.volt_drop + " V" : "—";
+    document.getElementById("s-anom").textContent = res.anomaly_count || 0;
+  }
+
+  renderTable(allAnomalies);
+
+  document.getElementById("btn-map").disabled = false;
+  document.getElementById("btn-csv").disabled = false;
+  document.getElementById("btn-txt").disabled = false;
+}
+
+// ─── Table rendering ──────────────────────────────────────────────────
+function renderTable(anomalies) {
+  const tbody    = document.getElementById("table-body");
+  const filtered = currentFilter === "ALL"
+    ? anomalies
+    : anomalies.filter(a => a.severity === currentFilter);
+
+  document.getElementById("row-count").textContent =
+    filtered.length + " of " + anomalies.length + " anomalies";
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5">
+      <div class="empty-state">
+        <div class="empty-icon">${currentFilter === "ALL" ? "✅" : "🔍"}</div>
+        <div>${currentFilter === "ALL" ? "No anomalies detected" : "No " + currentFilter + " anomalies"}</div>
+      </div>
+    </td></tr>`;
+    return;
+  }
+
+  const icons = { CRITICAL: "🔴", HIGH: "🟠", MEDIUM: "🟡" };
+  tbody.innerHTML = filtered.map(a => `
+    <tr>
+      <td><span class="sev-badge sev-${a.severity}">${icons[a.severity] || ""} ${a.severity}</span></td>
+      <td style="font-weight:500">${escHtml(a.type)}</td>
+      <td style="font-family:monospace">${a.row}</td>
+      <td style="font-family:monospace">${a.offsetTime != null ? Number(a.offsetTime).toFixed(2) : "—"}</td>
+      <td class="detail-cell" title="${escHtml(a.detail)}">${escHtml(a.detail)}</td>
+    </tr>
+  `).join("");
+}
+
+function filterTable(sev, btn) {
+  currentFilter = sev;
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  renderTable(allAnomalies);
+}
+
+// ─── Output actions ───────────────────────────────────────────────────
+function openMap() {
+  if (!sessionId) return;
+  window.open(API + "map/" + sessionId, "_blank");
+}
+function downloadReport(type) {
+  if (!sessionId) return;
+  window.location.href = API + "report/" + sessionId + "/" + type;
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────
+function clearResults() {
+  allAnomalies = [];
+  document.getElementById("verdict-pill").className   = "verdict-pill waiting";
+  document.getElementById("verdict-pill").textContent = "RUNNING…";
+  document.getElementById("verdict-title").textContent= "Analysis in progress";
+  document.getElementById("verdict-desc").textContent = "Please wait while the system analyses the flight data.";
+  document.getElementById("m-rows").textContent = "—";
+  document.getElementById("m-crit").textContent = "—";
+  document.getElementById("m-high").textContent = "—";
+  document.getElementById("m-med").textContent  = "—";
+  document.getElementById("stats-strip").classList.remove("visible");
+  document.getElementById("table-body").innerHTML = `<tr><td colspan="5">
+    <div class="empty-state"><div class="empty-icon">⏳</div><div>Analysing…</div></div>
+  </td></tr>`;
+  document.getElementById("row-count").textContent = "";
+  document.getElementById("btn-map").disabled = true;
+  document.getElementById("btn-csv").disabled = true;
+  document.getElementById("btn-txt").disabled = true;
+}
+
+function setRunning(v) {
+  document.getElementById("run-btn").disabled       = v;
+  document.getElementById("spinner").style.display  = v ? "block" : "none";
+  document.getElementById("run-btn-text").textContent= v ? "Analysing…" : "▶\u00a0 Run Analysis";
+}
+
+function showProgress(label, pct) {
+  document.getElementById("progress-wrap").style.display = "block";
+  document.getElementById("progress-label").textContent  = label;
+  document.getElementById("progress-fill").style.width   = pct + "%";
+}
+function hideProgress() {
+  document.getElementById("progress-wrap").style.display = "none";
+}
+
+function setStatus(msg, busy) {
+  document.getElementById("status-text").textContent = msg;
+  document.getElementById("status-dot").className =
+    "status-dot" + (busy ? " busy" : "");
+}
+
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 3200);
+}
+
+function escHtml(s) {
+  if (!s) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+</script>
+</body>
+</html>
